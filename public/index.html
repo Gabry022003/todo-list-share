@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>To-Do SPA</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f4f4f9;
+      color: #333;
+      max-width: 700px;
+      margin: 2rem auto;
+      padding: 1rem;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+      text-align: center;
+      color: #4a90e2;
+    }
+
+    input, button {
+      padding: 0.6rem;
+      margin: 0.3rem 0;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+      font-size: 1rem;
+      width: 100%;
+    }
+
+    button {
+      cursor: pointer;
+      background-color: #4a90e2;
+      color: white;
+      border: none;
+      transition: background-color 0.3s;
+    }
+
+    button:hover {
+      background-color: #357ab8;
+    }
+
+    #todos {
+      list-style-type: none;
+      padding: 0;
+      margin-top: 1rem;
+    }
+
+    #todos li {
+      background: white;
+      padding: 1rem;
+      margin: 0.5rem 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .del {
+      color: crimson;
+      font-weight: bold;
+      cursor: pointer;
+      margin-left: 10px;
+    }
+
+    .todo-meta {
+      font-size: 0.85rem;
+      color: #777;
+      margin-top: 0.3rem;
+      width: 100%;
+    }
+
+    #auth, #app {
+      margin-top: 1rem;
+    }
+
+    #logout {
+      margin-top: 0.5rem;
+      background-color: #999;
+    }
+
+    #logout:hover {
+      background-color: #666;
+    }
+  </style>
+</head>
+<body>
+  <h1>To-Do</h1>
+
+  <div id="auth">
+    <input id="username" placeholder="Username" />
+    <input id="password" type="password" placeholder="Password" />
+    <input id="role" placeholder="Ruolo (es. sviluppatore)" />
+    <button id="register">Registrati</button>
+    <button id="login">Login</button>
+  </div>
+
+  <div id="app" style="display:none">
+    <p>Benvenuto <strong><span id="user"></span></strong>! (<span id="level"></span>)</p>
+    <input id="todo-input" placeholder="Nuova to-do" />
+    <button id="add">Aggiungi</button>
+    <ul id="todos"></ul>
+    <button id="logout">Logout</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    let token = '', user = '', level = '', socket;
+
+    const dom = {
+      auth: document.getElementById('auth'),
+      app: document.getElementById('app'),
+      username: document.getElementById('username'),
+      password: document.getElementById('password'),
+      role: document.getElementById('role'),
+      register: document.getElementById('register'),
+      login: document.getElementById('login'),
+      logout: document.getElementById('logout'),
+      userSpan: document.getElementById('user'),
+      levelSpan: document.getElementById('level'),
+      todoInput: document.getElementById('todo-input'),
+      add: document.getElementById('add'),
+      todos: document.getElementById('todos')
+    };
+
+    async function api(path, method = 'GET', body) {
+      const res = await fetch('/api/' + path, {
+        method,
+        headers: {
+          ...(body && { 'Content-Type': 'application/json' }),
+          ...(token && { 'Authorization': 'Bearer ' + token })
+        },
+        body: body && JSON.stringify(body)
+      });
+      return res.json();
+    }
+
+    dom.register.onclick = async () => {
+      const res = await api('auth/register', 'POST', {
+        username: dom.username.value,
+        password: dom.password.value,
+        role: dom.role.value
+      });
+      alert(res.message || res.error);
+    };
+
+    dom.login.onclick = async () => {
+      const res = await api('auth/login', 'POST', {
+        username: dom.username.value,
+        password: dom.password.value
+      });
+      if (res.token) {
+        token = res.token;
+        user = res.username;
+        level = res.accessLevel;
+        dom.userSpan.textContent = user;
+        dom.levelSpan.textContent = level;
+        dom.auth.style.display = 'none';
+        dom.app.style.display = 'block';
+        startApp();
+      } else {
+        alert(res.error);
+      }
+    };
+
+    dom.logout.onclick = () => {
+      token = '';
+      user = '';
+      level = '';
+      if (socket) socket.disconnect();
+      dom.app.style.display = 'none';
+      dom.auth.style.display = 'block';
+      dom.username.value = '';
+      dom.password.value = '';
+      dom.role.value = '';
+      dom.todoInput.value = '';
+      dom.todos.innerHTML = '';
+    };
+
+    function renderTodos(list) {
+      dom.todos.innerHTML = '';
+      list.forEach(t => {
+        const li = document.createElement('li');
+
+        const text = document.createElement('div');
+        text.innerHTML = `<strong>[${t.createdBy}]</strong> ${t.text}`;
+        li.appendChild(text);
+
+        const createdAt = new Date(t.createdAt);
+        const orario = createdAt.toLocaleString('it-IT', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        const meta = document.createElement('div');
+        meta.className = 'todo-meta';
+        meta.textContent = `Creato il: ${orario}`;
+        li.appendChild(meta);
+
+        if (level === 'admin') {
+          const delBtn = document.createElement('span');
+          delBtn.className = 'del';
+          delBtn.textContent = '✖';
+          delBtn.onclick = () => deleteTodo(t._id);
+          li.appendChild(delBtn);
+        }
+
+        dom.todos.appendChild(li);
+      });
+    }
+
+    async function startApp() {
+      const list = await api('todos');
+      renderTodos(list);
+      socket = io();
+      socket.on('todo-added', () => startApp());
+      socket.on('todo-deleted', () => startApp());
+    }
+
+    dom.add.onclick = async () => {
+      const t = await api('todos', 'POST', { text: dom.todoInput.value });
+      if (t._id) {
+        socket.emit('add-todo', t);
+        dom.todoInput.value = '';
+      } else {
+        alert(t.error);
+      }
+    };
+
+    async function deleteTodo(id) {
+      const res = await api(`todos/${id}`, 'DELETE');
+      if (res.message) {
+        socket.emit('delete-todo', id);
+      } else {
+        alert(res.error);
+      }
+    }
+  </script>
+</body>
+</html>
